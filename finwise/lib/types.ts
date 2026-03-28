@@ -65,6 +65,7 @@ export interface PriceAlternative {
   url: string;
   title: string;
   savings: number;
+  thumbnail?: string;
 }
 
 export interface ProductAnalysis {

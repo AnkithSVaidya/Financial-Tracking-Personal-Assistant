@@ -21,7 +21,7 @@ const STAGE_MESSAGES: Record<Stage, string> = {
   fetching: "Fetching product page...",
   extracting: "Extracting product details...",
   analyzing: "Analyzing your spending habits...",
-  comparing: "Finding best prices across retailers...",
+  comparing: "Finding best prices across stores...",
   done: "Analysis complete!",
   error: "Something went wrong.",
 };
@@ -48,6 +48,22 @@ export default function AnalyzePage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropRef = useRef<HTMLDivElement>(null);
+
+  async function fetchAlternatives(info: ProductInfo, v: FinancialVerdict) {
+    if (v.recommendation === "dont_buy" || !info.productName) return { priceAlts: [] };
+
+    setStage("comparing");
+    const altRes = await fetch("/api/compare-prices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productName: info.productName, originalPrice: info.price || 0 }),
+    });
+    const altData = await altRes.json();
+    const priceAlts: PriceAlternative[] = altData.alternatives || [];
+    setAlternatives(priceAlts);
+
+    return { priceAlts };
+  }
 
   useEffect(() => {
     const p = getProfile();
@@ -93,35 +109,23 @@ export default function AnalyzePage() {
       setProductInfo(info);
       setVerdict(v);
 
-      // Check for missing info
-      const missing = info.missingInfo || [];
-      if (missing.length > 0) {
+      const needsPrice = !info.price;
+      const needsName = !info.productName;
+      if (needsPrice || needsName) {
         setShowMissingForm(true);
         setMissingPrice(info.price ? String(info.price) : "");
         setMissingName(info.productName || "");
       }
 
-      // Price comparison if buy/consider
-      if (v.recommendation !== "dont_buy" && info.productName) {
-        setStage("comparing");
-        const altRes = await fetch("/api/compare-prices", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ productName: info.productName, originalPrice: info.price || 0 }),
-        });
-        const altData = await altRes.json();
-        setAlternatives(altData.alternatives || []);
-      }
+      const { priceAlts } = await fetchAlternatives(info, v);
 
-      // Save to history
-      const analysis = {
+      addAnalysis({
         id: crypto.randomUUID(),
         timestamp: Date.now(),
         productInfo: info,
         verdict: v,
-        priceAlternatives: alternatives,
-      };
-      addAnalysis(analysis);
+        priceAlternatives: priceAlts,
+      });
 
       setStage("done");
     } catch (err) {
@@ -140,7 +144,6 @@ export default function AnalyzePage() {
     setShowMissingForm(false);
 
     try {
-      // Convert to base64
       const base64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => {
@@ -166,32 +169,23 @@ export default function AnalyzePage() {
       setProductInfo(info);
       setVerdict(v);
 
-      const missing = info.missingInfo || [];
-      if (missing.length > 0) {
+      const needsPrice = !info.price;
+      const needsName = !info.productName;
+      if (needsPrice || needsName) {
         setShowMissingForm(true);
         setMissingPrice(info.price ? String(info.price) : "");
         setMissingName(info.productName || "");
       }
 
-      if (v.recommendation !== "dont_buy" && info.productName) {
-        setStage("comparing");
-        const altRes = await fetch("/api/compare-prices", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ productName: info.productName, originalPrice: info.price || 0 }),
-        });
-        const altData = await altRes.json();
-        setAlternatives(altData.alternatives || []);
-      }
+      const { priceAlts } = await fetchAlternatives(info, v);
 
-      const analysis = {
+      addAnalysis({
         id: crypto.randomUUID(),
         timestamp: Date.now(),
         productInfo: info,
         verdict: v,
-        priceAlternatives: alternatives,
-      };
-      addAnalysis(analysis);
+        priceAlternatives: priceAlts,
+      });
 
       setStage("done");
     } catch (err) {
@@ -210,6 +204,7 @@ export default function AnalyzePage() {
     };
     setProductInfo(updatedInfo);
     setShowMissingForm(false);
+    setAlternatives([]);
     setStage("analyzing");
 
     try {
@@ -222,17 +217,9 @@ export default function AnalyzePage() {
         }),
       });
       const data = await res.json();
-      if (data.verdict) setVerdict(data.verdict);
-
-      if (data.verdict?.recommendation !== "dont_buy") {
-        setStage("comparing");
-        const altRes = await fetch("/api/compare-prices", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ productName: updatedInfo.productName, originalPrice: updatedInfo.price || 0 }),
-        });
-        const altData = await altRes.json();
-        setAlternatives(altData.alternatives || []);
+      if (data.verdict) {
+        setVerdict(data.verdict);
+        await fetchAlternatives(updatedInfo, data.verdict);
       }
 
       setStage("done");
@@ -242,7 +229,7 @@ export default function AnalyzePage() {
     }
   }
 
-  const isLoading = ["fetching", "extracting", "analyzing", "comparing"].includes(stage);
+  const isLoading = ["fetching", "extracting", "analyzing", "comparing", "suggesting"].includes(stage);
   const cat = profile?.categories.find((c) => c.id === productInfo?.category);
 
   if (!profile) return null;
@@ -654,42 +641,60 @@ export default function AnalyzePage() {
                       animate={{ opacity: 1, y: 0 }}
                       className="glass rounded-2xl p-5"
                     >
-                      <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+                      <h3 className="font-semibold text-white mb-1 flex items-center gap-2">
                         <ShoppingCart className="w-4 h-4 text-indigo-400" />
-                        Better Prices Found
+                        Same Product, Better Price
                       </h3>
+                      <p className="text-xs text-gray-500 mb-4">Real prices from Google Shopping — click to buy</p>
                       <div className="space-y-2">
                         {alternatives.map((alt, i) => (
-                          <div
+                          <a
                             key={i}
-                            className={`flex items-center gap-3 p-3 rounded-xl transition-all ${
-                              i === 0 ? "bg-emerald-500/10 border border-emerald-500/20" : "bg-white/5 hover:bg-white/8"
+                            href={alt.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`flex items-center gap-3 p-3 rounded-xl transition-all group ${
+                              i === 0
+                                ? "bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/15"
+                                : "bg-white/5 hover:bg-white/10"
                             }`}
                           >
-                            {i === 0 && (
-                              <span className="text-xs font-bold text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full flex-shrink-0">
-                                BEST
-                              </span>
+                            {alt.thumbnail ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={alt.thumbnail}
+                                alt={alt.title}
+                                className="w-10 h-10 object-contain rounded-lg bg-white/10 flex-shrink-0"
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                              />
+                            ) : (
+                              <div className="w-10 h-10 bg-white/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                                <ShoppingCart className="w-4 h-4 text-gray-500" />
+                              </div>
                             )}
                             <div className="flex-1 min-w-0">
-                              <div className="text-sm font-medium text-white capitalize">{alt.retailer}</div>
-                              <div className="text-xs text-gray-400 truncate">{alt.title}</div>
+                              <div className="flex items-center gap-2">
+                                <div className="text-sm font-medium text-white truncate">{alt.retailer}</div>
+                                {i === 0 && (
+                                  <span className="text-xs font-bold text-emerald-400 bg-emerald-500/20 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                                    BEST
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-gray-500 truncate">{alt.title}</div>
                             </div>
                             <div className="flex-shrink-0 text-right">
-                              <div className="text-sm font-bold text-white">{formatCurrency(alt.price)}</div>
+                              <div className="text-sm font-bold text-white">
+                                {formatCurrency(alt.price)}
+                              </div>
                               {alt.savings > 0 && (
-                                <div className="text-xs text-emerald-400">Save {formatCurrency(alt.savings)}</div>
+                                <div className="text-xs text-emerald-400">
+                                  Save {formatCurrency(alt.savings)}
+                                </div>
                               )}
                             </div>
-                            <a
-                              href={alt.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex-shrink-0 w-8 h-8 bg-indigo-500/20 hover:bg-indigo-500/40 rounded-lg flex items-center justify-center transition-colors"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5 text-indigo-400" />
-                            </a>
-                          </div>
+                            <ExternalLink className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0 opacity-40 group-hover:opacity-100 transition-opacity" />
+                          </a>
                         ))}
                       </div>
                     </motion.div>
