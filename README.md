@@ -23,4 +23,4 @@ Every budgeting app tells you what you already spent. FinWise catches you before
 
 ## Built with
 
-Next.js · Groq · SerpAPI · Tailwind CSS · Framer Motion
+TypeScript · Next.js · Groq · SerpAPI · Tailwind CSS · Framer Motion
